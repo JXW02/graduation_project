@@ -31,6 +31,7 @@ def LoadMovieData():
     n_users = len(ratings_df['userId'].unique())
     n_movies = len(ratings_df['movieId'].unique())
     R_shape = (n_users, n_movies)
+    print(f"数据集大小: {len(ratings_df)} 条评分, {n_users} 个用户, {n_movies} 部动漫")
     # 返回：[用户id，电影id](用户id从1开始，电影id从0开始)，评分，评分矩阵形状，电影id映射关系
     return x, y, R_shape, id_to_original, movies_df, ratings_df
 
@@ -64,30 +65,6 @@ def genre_one_hot(movies_df, movie_ids):
         id_to_index[movie_id] = idx
 
     return item_features, unique_genres, id_to_index
-
-
-def calculate_bayesian_average(ratings_df, movies_df):
-    """计算贝叶斯加权平均评分"""
-    # 1. 计算全局平均评分C
-    C = ratings_df['rating'].mean()
-
-    # 计算每部电影的评分统计
-    movie_stats = ratings_df.groupby('movieId').agg({
-        'rating': ['count', 'mean']
-    }).reset_index()
-    movie_stats.columns = ['movieId', 'vote_count', 'vote_average']
-
-    # 2. 确定基准数量m（评分数量的中位数）
-    m = movie_stats['vote_count'].median()
-
-    # 3. 计算贝叶斯加权平均分
-    movie_stats['bayesian_average'] = (movie_stats['vote_count'] * movie_stats['vote_average'] +
-                                       m * C) / (movie_stats['vote_count'] + m)
-
-    # 添加电影信息
-    result = pd.merge(movie_stats, movies_df[['movieId', 'title', 'genres']], on='movieId')
-
-    return result
 
 
 def cosine_similarity(A, B):
@@ -402,7 +379,7 @@ def main():
     print(f"准确率: {accuracy_metrics['accuracy']:.4f}")
 
     # 参数测试配置
-    theta_values = [0, 0.2, 0.5, 0.8, 1]
+    theta_values = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
     mmr_results = []
     dpp_results = []
     # 要选择的物品数量
@@ -561,7 +538,7 @@ def main():
     plt.grid(True, linestyle='--', alpha=0.7)
 
     plt.tight_layout()
-    plt.savefig('diversity_relevance_metrics.png', dpi=300)
+    plt.savefig('movie_diversity_relevance_metrics.png', dpi=300)
     plt.show()
 
     # 绘制相关性-多样性权衡图
@@ -581,7 +558,7 @@ def main():
     plt.title('相关性-多样性权衡关系')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
-    plt.savefig('relevance_diversity_tradeoff.png', dpi=300)
+    plt.savefig('movie_relevance_diversity_tradeoff.png', dpi=300)
     plt.show()
 
 

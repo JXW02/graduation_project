@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import MultiLabelBinarizer
-from movie_recommendation import mmr, dpp, cosine_similarity, calculate_ndcg, calculate_internal_similarity, evaluate_diversity_relevance
+from movie_recommendation import mmr, dpp, cosine_similarity, calculate_ndcg, calculate_internal_similarity
 
 
 def ConvertToDense(x, y, shape):
@@ -171,15 +171,15 @@ def userBased(R_train, R_test, k=5, similarity_metric='cosine'):
     print("预测评分...")
     R_pred = np.zeros((num_users, num_items))
     mask_union = mask_train | mask_test  # 取并集
-    
+
     # 分批处理用户，减少内存使用
     for u in range(num_users):
         if u % 100 == 0:
             print(f"处理用户 {u}/{num_users}")
-        
+
         # 获取该用户的邻居
         neighbors_u = neighbors[u]
-        
+
         # 只处理用户有评分或需要预测的物品
         for i in range(num_items):
             if mask_union[u, i]:
@@ -270,7 +270,7 @@ def main():
     print(f"准确率: {accuracy_metrics['accuracy']:.4f}")
     
     # 参数测试配置
-    theta_values = [0, 0.2, 0.5, 0.8, 1]
+    theta_values = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
     mmr_results = []
     dpp_results = []
     # 要选择的物品数量
@@ -428,7 +428,7 @@ def main():
     plt.grid(True, linestyle='--', alpha=0.7)
     
     plt.tight_layout()
-    plt.savefig('d:\\biyesheji\\anime_diversity_relevance_metrics.png', dpi=300)
+    plt.savefig('anime_diversity_relevance_metrics.png', dpi=300)
     plt.show()
     
     # 绘制相关性-多样性权衡图
@@ -448,7 +448,7 @@ def main():
     plt.title('相关性-多样性权衡关系')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
-    plt.savefig('d:\\biyesheji\\anime_relevance_diversity_tradeoff.png', dpi=300)
+    plt.savefig('anime_relevance_diversity_tradeoff.png', dpi=300)
     plt.show()
 
 
