@@ -98,7 +98,7 @@ def fast_cosine_similarity(R, mask):
     return similarity_matrix
 
 
-def userBased(R_train, R_test, k=5, similarity_metric='cosine'):
+def userBased(R_train, R_test, k=5):
     """基于用户的协同过滤推荐算法"""
     num_users, num_items = R_train.shape
     mask_train = R_train > 0
@@ -106,11 +106,8 @@ def userBased(R_train, R_test, k=5, similarity_metric='cosine'):
     user_mean = np.true_divide(R_train.sum(1), mask_train.sum(1))
     user_mean = np.nan_to_num(user_mean)  # 分母为0时均值换成0
 
-    # 计算用户相似度矩阵
-    if similarity_metric == 'cosine':
-        similarity = fast_cosine_similarity(R_train, mask_train)
-    else:
-        raise ValueError("Unsupported similarity metric. Choose 'cosine'.")
+    # 计算用户余弦相似度矩阵
+    similarity = fast_cosine_similarity(R_train, mask_train)
 
     # 为每个用户选择前k个相似用户作为邻居
     neighbors = np.argsort(-similarity, axis=1)[:, 1:k + 1]  # 排除自身
@@ -131,8 +128,8 @@ def userBased(R_train, R_test, k=5, similarity_metric='cosine'):
                     R_pred[u, i] = np.dot(sim_u, ratings_u) / np.sum(np.abs(sim_u))
 
     # 裁剪评分范围
-    R_pred[R_pred > 5] = 5.
-    R_pred[R_pred < 1] = 1.
+    R_pred[R_pred > 5] = 5
+    R_pred[R_pred < 1] = 1
 
     # 计算训练集上的 RMSE
     preds_train = R_pred[mask_train]
@@ -368,7 +365,7 @@ def main():
 
     # 基于用户的协同过滤，生成用户对电影的预测评分
     R = ConvertToDense(x, y, R_shape)
-    R_pred = userBased(R, R.copy(), 5, 'cosine')
+    R_pred = userBased(R, R.copy(), 5)
 
     # 评估协同过滤预测结果的准确度
     accuracy_metrics = evaluate_cf_accuracy(R_pred, R)
@@ -413,6 +410,11 @@ def main():
 
     # 理想排序（按评分降序）
     ideal_items = sorted(cf_candidates, key=lambda x: x[1], reverse=True)
+
+    # 协同过滤原始推荐的多样性指标
+    cf_topk = cf_candidates[:k]
+    # 计算协同过滤Top-k的多样性指标
+    cf_metrics = evaluate_diversity_relevance(cf_topk, ideal_items, mmr_similarity, movies_df)
 
     # 测试不同theta值的MMR算法
     print("\n===== MMR算法结果 =====")
@@ -486,7 +488,13 @@ def main():
     plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
     plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
 
-    # 提取评估指标
+    # 协同过滤原始推荐指标
+    cf_avg_rating = cf_metrics['avg_rating']
+    cf_ndcg = cf_metrics['ndcg']
+    cf_diversity = cf_metrics['diversity']
+    cf_coverage = cf_metrics['category_coverage']
+
+    # MMR与DPP评估指标
     mmr_avg_ratings = [r[1]['avg_rating'] for r in mmr_results]
     mmr_ndcg = [r[1]['ndcg'] for r in mmr_results]
     mmr_diversity = [r[1]['diversity'] for r in mmr_results]
@@ -501,6 +509,7 @@ def main():
     plt.subplot(2, 2, 1)
     plt.plot(theta_values, mmr_avg_ratings, 'bo-', linewidth=2, label='MMR')
     plt.plot(theta_values, dpp_avg_ratings, 'ro-', linewidth=2, label='DPP')
+    plt.hlines(cf_avg_rating, theta_values[0], theta_values[-1], colors='g', linestyles='--', label='协同过滤')
     plt.xlabel('Theta参数')
     plt.ylabel('平均评分')
     plt.title('平均评分随Theta变化')
@@ -511,6 +520,7 @@ def main():
     plt.subplot(2, 2, 2)
     plt.plot(theta_values, mmr_ndcg, 'bo-', linewidth=2, label='MMR')
     plt.plot(theta_values, dpp_ndcg, 'ro-', linewidth=2, label='DPP')
+    plt.hlines(cf_ndcg, theta_values[0], theta_values[-1], colors='g', linestyles='--', label='协同过滤')
     plt.xlabel('Theta参数')
     plt.ylabel('NDCG')
     plt.title('NDCG随Theta变化')
@@ -521,6 +531,7 @@ def main():
     plt.subplot(2, 2, 3)
     plt.plot(theta_values, mmr_diversity, 'bo-', linewidth=2, label='MMR')
     plt.plot(theta_values, dpp_diversity, 'ro-', linewidth=2, label='DPP')
+    plt.hlines(cf_diversity, theta_values[0], theta_values[-1], colors='g', linestyles='--', label='协同过滤')
     plt.xlabel('Theta参数')
     plt.ylabel('多样性')
     plt.title('多样性随Theta变化')
@@ -531,6 +542,7 @@ def main():
     plt.subplot(2, 2, 4)
     plt.plot(theta_values, mmr_coverage, 'bo-', linewidth=2, label='MMR')
     plt.plot(theta_values, dpp_coverage, 'ro-', linewidth=2, label='DPP')
+    plt.hlines(cf_coverage, theta_values[0], theta_values[-1], colors='g', linestyles='--', label='协同过滤')
     plt.xlabel('Theta参数')
     plt.ylabel('类别覆盖率')
     plt.title('类别覆盖率随Theta变化')

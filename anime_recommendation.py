@@ -4,7 +4,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import MultiLabelBinarizer
-from movie_recommendation import mmr, dpp, cosine_similarity, calculate_ndcg, calculate_internal_similarity
 
 
 def ConvertToDense(x, y, shape):
@@ -89,27 +88,28 @@ def genre_one_hot(anime_df, anime_ids):
     return item_features, unique_genres, id_to_index
 
 
-def calculate_category_coverage(items, anime_df):
-    """计算推荐列表的类别覆盖率"""
-    # 获取所有可能的类别
-    all_genres = set()
-    for genres in anime_df['genre'].str.split(', '):
-        if isinstance(genres, list):  # 确保genres是列表
-            all_genres.update(genres)
-    
-    # 获取推荐列表中的类别
-    recommended_genres = set()
-    for item in items:
-        anime_id = item[0]
-        genres = anime_df[anime_df['anime_id'] == anime_id]['genre'].values
-        if len(genres) > 0 and isinstance(genres[0], str):
-            recommended_genres.update(genres[0].split(', '))
-    
-    # 计算覆盖率
-    return len(recommended_genres) / len(all_genres) if len(all_genres) > 0 else 0
+def cosine_similarity(A, B):
+    # 计算点积
+    dot_product = np.dot(A, B.T)
+
+    # 计算每个向量的范数
+    norm_A = np.linalg.norm(A, axis=1, keepdims=True)
+    norm_B = np.linalg.norm(B, axis=1, keepdims=True)
+
+    # 避免除以零
+    norm_A[norm_A == 0] = 1e-10
+    norm_B[norm_B == 0] = 1e-10
+
+    # 计算余弦相似度
+    similarity_matrix = dot_product / np.dot(norm_A, norm_B.T)
+
+    # 保证对角线为1
+    np.fill_diagonal(similarity_matrix, 1)
+
+    return similarity_matrix
 
 
-def userBased(R_train, R_test, k=5, similarity_metric='cosine'):
+def userBased(R_train, R_test, k=5):
     """基于用户的协同过滤推荐算法"""
     num_users, num_items = R_train.shape
     mask_train = R_train > 0
@@ -131,7 +131,7 @@ def userBased(R_train, R_test, k=5, similarity_metric='cosine'):
     similarity = np.zeros((num_users, num_users))
 
     # 分批计算相似度，避免内存溢出
-    batch_size = 100  # 调整批次大小以适应内存
+    batch_size = 100  # 调整批次大小
     for i in range(0, num_users, batch_size):
         end_i = min(i + batch_size, num_users)
         for j in range(0, num_users, batch_size):
@@ -166,7 +166,7 @@ def userBased(R_train, R_test, k=5, similarity_metric='cosine'):
     # 为每个用户选择前k个相似用户作为邻居
     print("为每个用户选择邻居...")
     neighbors = np.argsort(-similarity, axis=1)[:, 1:k + 1]  # 排除自身
-    
+
     # 预测评分
     print("预测评分...")
     R_pred = np.zeros((num_users, num_items))
@@ -191,46 +191,218 @@ def userBased(R_train, R_test, k=5, similarity_metric='cosine'):
                     sim_u = similarity[u, neighbors_u][mask_neighbors]
                     ratings_u = R_train[neighbors_u, i][mask_neighbors]
                     R_pred[u, i] = np.dot(sim_u, ratings_u) / np.sum(np.abs(sim_u))
-    
+
     # 裁剪评分范围（动漫评分范围是1-10）
-    R_pred[R_pred > 10] = 10.
-    R_pred[R_pred < 1] = 1.
-    
+    R_pred[R_pred > 10] = 10
+    R_pred[R_pred < 1] = 1
+
     # 计算训练集上的 RMSE
     preds_train = R_pred[mask_train]
     actual_train = R_train[mask_train]
     rmse_train = np.sqrt(mean_squared_error(actual_train, preds_train))
     print(f'Training RMSE: {rmse_train:.4f}')
-    
+
     return R_pred
+
+
+def mmr(candidate_items, item_similarity, k, theta):
+    """MMR多样性重排序"""
+    # 将预测分数由高到低排序，初始化推荐列表S
+    R_sorted = sorted(candidate_items, key=lambda x: x[1], reverse=True)
+    S = [R_sorted.pop(0)]
+
+    for _ in range(k - 1):
+        max_mmr = -np.inf
+        best_item = None
+
+        # 遍历剩余候选物品
+        for idx, (item_id, rating) in enumerate(R_sorted):
+            # 计算与已选物品的最大相似度
+            sim_max = 0
+            for s in S:
+                sim = item_similarity[item_id, s[0]]
+                if sim > sim_max:
+                    sim_max = sim
+
+            # 计算MMR得分
+            mmr_score = theta * rating - (1 - theta) * sim_max
+
+            # 选择最优项
+            if mmr_score > max_mmr:
+                max_mmr = mmr_score
+                best_item = idx
+
+        # 更新推荐列表
+        S.append(R_sorted.pop(best_item))
+
+    return S
+
+
+def dpp(item_features, rewards, k, theta):
+    """
+    基于Cholesky分解的k-DPP算法实现
+
+    参数:
+    - item_features: 物品特征矩阵，每行是一个物品的特征向量
+    - rewards: 物品的精排分数
+    - k: 要选择的物品数量
+    - theta: 权衡相关性和多样性的参数，范围[0,1]
+
+    返回:
+    - 选中的k个物品的索引
+    """
+    n = len(rewards)  # 物品数量
+
+    # 步骤2: 计算相似度矩阵A
+    A = cosine_similarity(item_features, item_features)
+
+    # 步骤3: 选择reward最高的物品作为初始物品
+    i = np.argmax(rewards)
+    S = [i]  # 初始化集合S
+    L = np.array([[1.0]])  # 初始化Cholesky分解矩阵L
+
+    # 剩余候选物品集合
+    R = list(range(n))
+    R.remove(i)
+
+    # 步骤4: 迭代选择剩余的k-1个物品
+    for t in range(1, k):
+        if not R:  # 如果没有剩余物品可选
+            break
+
+        best_score = float('-inf')
+        best_item = None
+        best_c = None
+        best_d = None
+
+        # 步骤4(a): 对每个剩余物品计算分数
+        for i in R:
+            # I. 获取矩阵A_S∪{i}的最后一行[a_i, 1]
+            a_i = np.array([A[i, j] for j in S])
+
+            # II. 求解线性方程组a_i = L·c_i
+            c_i = np.linalg.solve(L, a_i)
+
+            # III. 计算d_i^2 = 1 - c_i^T·c_i
+            d_i_squared = 1 - np.dot(c_i, c_i.T)
+
+            # 确保数值稳定性
+            if d_i_squared <= 0:
+                d_i_squared = 1e-10
+
+            # 步骤4(b): 计算分数并找到最佳物品
+            score = theta * rewards[i] + (1 - theta) * np.log(d_i_squared)
+
+            if score > best_score:
+                best_score = score
+                best_item = i
+                best_c = c_i
+                best_d = np.sqrt(d_i_squared)
+
+        if best_item is None:
+            break
+
+        # 步骤4(c): 更新集合S
+        S.append(best_item)
+        R.remove(best_item)
+
+        # 步骤4(d): 更新Cholesky分解矩阵L
+        L_new = np.zeros((len(S), len(S)))
+        L_new[:-1, :-1] = L
+        L_new[-1, :-1] = best_c
+        L_new[-1, -1] = best_d
+        L = L_new
+
+    # 步骤5: 返回选中的k个物品
+    return S
 
 
 def evaluate_cf_accuracy(R_pred, R_actual):
     """评估协同过滤预测结果的准确度"""
     # 只评估实际有评分的位置
     mask = R_actual > 0
-    
+
     # 计算RMSE (Root Mean Squared Error)
     rmse = np.sqrt(mean_squared_error(R_actual[mask], R_pred[mask]))
-    
+
     # 计算MAE (Mean Absolute Error)
     mae = np.mean(np.abs(R_actual[mask] - R_pred[mask]))
-    
+
     # 计算预测评分与实际评分的相关系数
     correlation = np.corrcoef(R_actual[mask], R_pred[mask])[0, 1]
-    
+
     # 计算预测准确率 (将评分四舍五入到最近的整数，然后计算准确匹配的比例)
     rounded_pred = np.round(R_pred[mask])
     rounded_pred[rounded_pred > 10] = 10
     rounded_pred[rounded_pred < 1] = 1
     accuracy = np.mean(rounded_pred == R_actual[mask])
-    
+
     return {
         'rmse': rmse,
         'mae': mae,
         'correlation': correlation,
         'accuracy': accuracy
     }
+
+
+def calculate_ndcg(recommended_items, ideal_items, k=10):
+    """计算NDCG (Normalized Discounted Cumulative Gain)"""
+    # 获取推荐项目的评分
+    rec_ratings = [item[1] for item in recommended_items[:k]]
+    # 获取理想排序的评分
+    ideal_ratings = [item[1] for item in ideal_items[:k]]
+
+    # 计算DCG
+    dcg = 0
+    for i, rating in enumerate(rec_ratings):
+        dcg += rating / np.log2(i + 2)  # i+2是因为log2(1)=0
+
+    # 计算IDCG
+    idcg = 0
+    for i, rating in enumerate(ideal_ratings):
+        idcg += rating / np.log2(i + 2)
+
+    # 计算NDCG
+    if idcg == 0:
+        return 0
+    return dcg / idcg
+
+
+def calculate_internal_similarity(items, similarity_matrix):
+    """计算推荐列表的内部相似性"""
+    if len(items) < 2:
+        return 0
+
+    total_sim = 0
+    count = 0
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            id1 = items[i][0]
+            id2 = items[j][0]
+            total_sim += similarity_matrix[id1, id2]
+            count += 1
+
+    return total_sim / count if count > 0 else 0
+
+
+def calculate_category_coverage(items, anime_df):
+    """计算推荐列表的类别覆盖率"""
+    # 获取所有可能的类别
+    all_genres = set()
+    for genres in anime_df['genre'].str.split(', '):
+        if isinstance(genres, list):  # 确保genres是列表
+            all_genres.update(genres)
+    
+    # 获取推荐列表中的类别
+    recommended_genres = set()
+    for item in items:
+        anime_id = item[0]
+        genres = anime_df[anime_df['anime_id'] == anime_id]['genre'].values
+        if len(genres) > 0 and isinstance(genres[0], str):
+            recommended_genres.update(genres[0].split(', '))
+    
+    # 计算覆盖率
+    return len(recommended_genres) / len(all_genres) if len(all_genres) > 0 else 0
 
 
 def evaluate_anime_diversity_relevance(recommended_items, ideal_items, similarity_matrix, anime_df):
@@ -259,7 +431,7 @@ def main():
     
     # 基于用户的协同过滤，生成用户对动漫的预测评分
     R = ConvertToDense(x, y, R_shape)
-    R_pred = userBased(R, R.copy(), 5, 'cosine')
+    R_pred = userBased(R, R.copy(), 5)
     
     # 评估协同过滤预测结果的准确度
     accuracy_metrics = evaluate_cf_accuracy(R_pred, R)
@@ -304,6 +476,11 @@ def main():
     
     # 理想排序（按评分降序）
     ideal_items = sorted(cf_candidates, key=lambda x: x[1], reverse=True)
+
+    # 协同过滤原始推荐的多样性指标
+    cf_topk = cf_candidates[:k]
+    # 计算协同过滤Top-k的多样性指标
+    cf_metrics = evaluate_anime_diversity_relevance(cf_topk, ideal_items, mmr_similarity, anime_df)
     
     # 测试不同theta值的MMR算法
     print("\n===== MMR算法结果 =====")
@@ -375,8 +552,14 @@ def main():
     plt.figure(figsize=(15, 12))
     plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
     plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
-    
-    # 提取评估指标
+
+    # 协同过滤原始推荐指标
+    cf_avg_rating = cf_metrics['avg_rating']
+    cf_ndcg = cf_metrics['ndcg']
+    cf_diversity = cf_metrics['diversity']
+    cf_coverage = cf_metrics['category_coverage']
+
+    # MMR与DPP评估指标
     mmr_avg_ratings = [r[1]['avg_rating'] for r in mmr_results]
     mmr_ndcg = [r[1]['ndcg'] for r in mmr_results]
     mmr_diversity = [r[1]['diversity'] for r in mmr_results]
@@ -386,41 +569,45 @@ def main():
     dpp_ndcg = [r[1]['ndcg'] for r in dpp_results]
     dpp_diversity = [r[1]['diversity'] for r in dpp_results]
     dpp_coverage = [r[1]['category_coverage'] for r in dpp_results]
-    
+
     # 绘制平均评分
     plt.subplot(2, 2, 1)
     plt.plot(theta_values, mmr_avg_ratings, 'bo-', linewidth=2, label='MMR')
     plt.plot(theta_values, dpp_avg_ratings, 'ro-', linewidth=2, label='DPP')
+    plt.hlines(cf_avg_rating, theta_values[0], theta_values[-1], colors='g', linestyles='--', label='协同过滤')
     plt.xlabel('Theta参数')
     plt.ylabel('平均评分')
     plt.title('平均评分随Theta变化')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
-    
+
     # 绘制NDCG
     plt.subplot(2, 2, 2)
     plt.plot(theta_values, mmr_ndcg, 'bo-', linewidth=2, label='MMR')
     plt.plot(theta_values, dpp_ndcg, 'ro-', linewidth=2, label='DPP')
+    plt.hlines(cf_ndcg, theta_values[0], theta_values[-1], colors='g', linestyles='--', label='协同过滤')
     plt.xlabel('Theta参数')
     plt.ylabel('NDCG')
     plt.title('NDCG随Theta变化')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
-    
+
     # 绘制多样性
     plt.subplot(2, 2, 3)
     plt.plot(theta_values, mmr_diversity, 'bo-', linewidth=2, label='MMR')
     plt.plot(theta_values, dpp_diversity, 'ro-', linewidth=2, label='DPP')
+    plt.hlines(cf_diversity, theta_values[0], theta_values[-1], colors='g', linestyles='--', label='协同过滤')
     plt.xlabel('Theta参数')
     plt.ylabel('多样性')
     plt.title('多样性随Theta变化')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
-    
+
     # 绘制类别覆盖率
     plt.subplot(2, 2, 4)
     plt.plot(theta_values, mmr_coverage, 'bo-', linewidth=2, label='MMR')
     plt.plot(theta_values, dpp_coverage, 'ro-', linewidth=2, label='DPP')
+    plt.hlines(cf_coverage, theta_values[0], theta_values[-1], colors='g', linestyles='--', label='协同过滤')
     plt.xlabel('Theta参数')
     plt.ylabel('类别覆盖率')
     plt.title('类别覆盖率随Theta变化')
